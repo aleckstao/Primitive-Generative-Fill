@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Primitive Generative Fill</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            font-family: Helvetica, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        label {
+            margin-right: 10px;
+        }
+        #upload {
+            margin-bottom: 20px;
+        }
+        #canvas {
+            border: 1px solid black;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <input type="file" id="upload" accept="image/*">
+        
+        <div>
+            <label for="mode">edge extrapolation mode:</label>
+            <select id="mode">
+                <option value="random">random</option>
+                <option value="gradient">gradient</option>
+                <option value="chunk">chunk</option>
+            </select>
+        </div>
+        
+        <div>
+            <label for="brightness">max brightness:</label>
+            <input type="range" id="brightness" min="0" max="255" value="255">
+        </div>
+        
+        <div>
+            <label for="blur-toggle">apply blur:</label>
+            <input type="checkbox" id="blur-toggle">
+        </div>
+        <div>
+            <label for="blur-radius">blur radius:</label>
+            <input type="range" id="blur-radius" min="1" max="20" value="5">
+        </div>
+        
+        <div id="chunk-size-control" style="display: none;">
+            <label for="chunk-size">chunk size:</label>
+            <input type="range" id="chunk-size" min="10" max="100" value="20">
+        </div>
+
+        <button id="reset-button">reset</button>
+    </div>
+
+    <canvas id="canvas" width="540" height="540"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const upload = document.getElementById('upload');
+        const modeSelect = document.getElementById('mode');
+        const brightnessSlider = document.getElementById('brightness');
+        const blurToggle = document.getElementById('blur-toggle');
+        const blurRadiusSlider = document.getElementById('blur-radius');
+        const chunkSizeControl = document.getElementById('chunk-size-control');
+        const chunkSizeSlider = document.getElementById('chunk-size');
+        const resetButton = document.getElementById('reset-button');
+
+        const originalSize = 270;
+        const expandedSize = 540;
+        
+        let img = new Image();
+
+        // Image upload handler
+        upload.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                img = new Image();
+                img.onload = drawImage;
+                img.src = URL.createObjectURL(file);
+            }
+        });
+
+        // Draw the image and fill edges based on the selected mode
+        function drawImage() {
+            // Center the original image
+            const startX = (expandedSize - originalSize) / 2;
+            const startY = (expandedSize - originalSize) / 2;
+
+            // Clear the canvas and draw the original image in the center
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, startX, startY, originalSize, originalSize);
+
+            const originalImageData = ctx.getImageData(startX, startY, originalSize, originalSize).data;
+
+            // Select the mode and call the appropriate edge fill function
+            const mode = modeSelect.value;
+            if (mode === "random") {
+                fillEdgesRandom(originalImageData, startX, startY);
+            } else if (mode === "gradient") {
+                fillEdgesGradient(originalImageData, startX, startY);
+            } else if (mode === "chunk") {
+                fillEdgesChunk(originalImageData, startX, startY);
+            }
+
+            // Apply blur if enabled
+            if (blurToggle.checked) {
+                const blurRadius = parseInt(blurRadiusSlider.value);
+                applyBlur(blurRadius);
+            }
+        }
+
+        // Fill edges with random pixels below the brightness threshold
+        function fillEdgesRandom(originalImageData, startX, startY) {
+            const brightnessThreshold = parseInt(brightnessSlider.value);
+
+            function getBrightness(r, g, b) {
+                return 0.299 * r + 0.587 * g + 0.114 * b;
+            }
+
+            function getRandomPixelBelowBrightness(threshold) {
+                let r, g, b, a, brightness;
+                do {
+                    const randomIndex = Math.floor(Math.random() * (originalSize * originalSize)) * 4;
+                    r = originalImageData[randomIndex];
+                    g = originalImageData[randomIndex + 1];
+                    b = originalImageData[randomIndex + 2];
+                    a = originalImageData[randomIndex + 3];
+                    brightness = getBrightness(r, g, b);
+                } while (brightness > threshold);
+                return { r, g, b, a };
+            }
+
+            for (let y = 0; y < startY; y++) {
+                for (let x = 0; x < expandedSize; x++) {
+                    const { r, g, b, a } = getRandomPixelBelowBrightness(brightnessThreshold);
+                    ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
+                    ctx.fillRect(x, y, 1, 1);
+                    ctx.fillRect(x, expandedSize - y - 1, 1, 1);
+                }
+            }
+
+            for (let x = 0; x < startX; x++) {
+                for (let y = 0; y < expandedSize; y++) {
+                    const { r, g, b, a } = getRandomPixelBelowBrightness(brightnessThreshold);
+                    ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
+                    ctx.fillRect(x, y, 1, 1);
+                    ctx.fillRect(expandedSize - x - 1, y, 1, 1);
+                }
+            }
+        }
+
+        // Fill edges with a gradient effect from edge pixels fading to a center color
+        function fillEdgesGradient(originalImageData, startX, startY) {
+            const centerPixelIndex = Math.floor(originalSize * originalSize / 2) * 4;
+            const centerColor = {
+                r: originalImageData[centerPixelIndex],
+                g: originalImageData[centerPixelIndex + 1],
+                b: originalImageData[centerPixelIndex + 2]
+            };
+
+            // Top and bottom gradient edges
+            for (let y = 0; y < startY; y++) {
+                const fadeFactor = y / startY;
+                for (let x = 0; x < expandedSize; x++) {
+                    const edgePixel = ctx.getImageData(x, startY, 1, 1).data;
+                    const r = edgePixel[0] * (1 - fadeFactor) + centerColor.r * fadeFactor;
+                    const g = edgePixel[1] * (1 - fadeFactor) + centerColor.g * fadeFactor;
+                    const b = edgePixel[2] * (1 - fadeFactor) + centerColor.b * fadeFactor;
+                    ctx.fillStyle = `rgb(${r},${g},${b})`;
+                    ctx.fillRect(x, y, 1, 1);
+                    ctx.fillRect(x, expandedSize - y - 1, 1, 1);
+                }
+            }
+
+            // Left and right gradient edges
+            for (let x = 0; x < startX; x++) {
+                const fadeFactor = x / startX;
+                for (let y = 0; y < expandedSize; y++) {
+                    const edgePixel = ctx.getImageData(startX, y, 1, 1).data;
+                    const r = edgePixel[0] * (1 - fadeFactor) + centerColor.r * fadeFactor;
+                    const g = edgePixel[1] * (1 - fadeFactor) + centerColor.g * fadeFactor;
+                    const b = edgePixel[2] * (1 - fadeFactor) + centerColor.b * fadeFactor;
+                    ctx.fillStyle = `rgb(${r},${g},${b})`;
+                    ctx.fillRect(x, y, 1, 1);
+                    ctx.fillRect(expandedSize - x - 1, y, 1, 1);
+                }
+            }
+        }
+
+        // Fill edges with chunks
+        function fillEdgesChunk(originalImageData, startX, startY) {
+            const chunkSize = parseInt(chunkSizeSlider.value);
+
+            function drawChunk(x, y) {
+                const randomX = Math.floor(Math.random() * (originalSize - chunkSize));
+                const randomY = Math.floor(Math.random() * (originalSize - chunkSize));
+                const chunk = ctx.getImageData(startX + randomX, startY + randomY, chunkSize, chunkSize);
+                ctx.putImageData(chunk, x, y);
+            }
+
+            // Top and bottom edges
+            for (let y = 0; y < startY; y += chunkSize) {
+                for (let x = 0; x < expandedSize; x += chunkSize) {
+                    drawChunk(x, y);
+                    drawChunk(x, expandedSize - y - chunkSize);
+                }
+            }
+
+            // Left and right edges
+            for (let x = 0; x < startX; x += chunkSize) {
+                for (let y = 0; y < expandedSize; y += chunkSize) {
+                    drawChunk(x, y);
+                    drawChunk(expandedSize - x - chunkSize, y);
+                }
+            }
+        }
+
+        // Apply blur effect to edges
+        function applyBlur(radius) {
+            const blurredData = ctx.getImageData(0, 0, expandedSize, expandedSize);
+            const data = blurredData.data;
+
+            function getPixelIndex(x, y) {
+                return (y * expandedSize + x) * 4;
+            }
+
+            for (let y = 0; y < expandedSize; y++) {
+                for (let x = 0; x < expandedSize; x++) {
+                    if (x < (expandedSize - originalSize) / 2 || x >= (expandedSize + originalSize) / 2 ||
+                        y < (expandedSize - originalSize) / 2 || y >= (expandedSize + originalSize) / 2) {
+                        let r = 0, g = 0, b = 0, count = 0;
+                        for (let dy = -radius; dy <= radius; dy++) {
+                            for (let dx = -radius; dx <= radius; dx++) {
+                                const nx = x + dx;
+                                const ny = y + dy;
+                                if (nx >= 0 && nx < expandedSize && ny >= 0 && ny < expandedSize) {
+                                    const idx = getPixelIndex(nx, ny);
+                                    r += data[idx];
+                                    g += data[idx + 1];
+                                    b += data[idx + 2];
+                                    count++;
+                                }
+                            }
+                        }
+                        const index = getPixelIndex(x, y);
+                        data[index] = r / count;
+                        data[index + 1] = g / count;
+                        data[index + 2] = b / count;
+                    }
+                }
+            }
+            ctx.putImageData(blurredData, 0, 0);
+        }
+
+        // Show/hide chunk size slider based on selected mode
+        modeSelect.addEventListener('change', function() {
+            chunkSizeControl.style.display = modeSelect.value === 'chunk' ? 'block' : 'none';
+            drawImage();
+        });
+
+        // Reset button to clear canvas and controls
+        resetButton.addEventListener('click', function() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            upload.value = "";
+            brightnessSlider.value = 255;
+            blurToggle.checked = false;
+            blurRadiusSlider.value = 5;
+            chunkSizeSlider.value = 20;
+            modeSelect.value = "random";
+            chunkSizeControl.style.display = 'none';
+        });
+
+        // Update edges and blur settings interactively
+        brightnessSlider.addEventListener('input', drawImage);
+        blurToggle.addEventListener('change', drawImage);
+        blurRadiusSlider.addEventListener('input', drawImage);
+        chunkSizeSlider.addEventListener('input', drawImage);
+    </script>
+</body>
+</html>
